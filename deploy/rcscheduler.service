@@ -1,0 +1,25 @@
+[Unit]
+Description=rcscheduler migration controller
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=rcscheduler
+Group=rcscheduler
+WorkingDirectory=/var/lib/rcscheduler
+StateDirectory=rcscheduler
+StateDirectoryMode=0700
+RuntimeDirectory=rcscheduler
+RuntimeDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/local/bin/rcscheduler --data-dir /var/lib/rcscheduler serve --rclone /usr/local/bin/rclone --rclone-config /etc/rcscheduler/rclone.conf --runtime-dir /run/rcscheduler
+Restart=on-failure
+RestartSec=5
+# 先通知控制器持久化中断意图，超时后回收整个进程组。
+KillMode=mixed
+TimeoutStopSec=45
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
