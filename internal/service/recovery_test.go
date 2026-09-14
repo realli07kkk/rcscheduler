@@ -31,6 +31,43 @@ func closeService(t *testing.T, s *Service) {
 	}
 }
 
+func TestLegacySettingsAndRcloneOverridesAfterRestart(t *testing.T) {
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"version":1,"record":{"revision":3,"maxRunning":1,"bandwidthBudget":"40M","transfers":64,"checkers":64,"paused":false}}`
+	if err := os.WriteFile(st.Path("scheduler.json"), []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e := &fakeEngine{}
+	s := openAt(t, st, e)
+	if got := s.Settings(); got.Revision != 3 || got.UserAgent != "" || got.S3UploadConcurrency != 0 {
+		t.Fatalf("旧配置加载错误: %+v", got)
+	}
+	ua, uploads := "aws-sdk-go-v2/1.41.4", 8
+	if _, err := s.UpdateSettings(model.SettingsPatch{UserAgent: &ua, S3UploadConcurrency: &uploads}); err != nil {
+		t.Fatal(err)
+	}
+	want := s.Settings()
+	closeService(t, s)
+	s2 := openAt(t, st, e)
+	if got := s2.Settings(); got != want {
+		t.Fatalf("重启后配置改变: %+v", got)
+	}
+	ua, uploads = "", 0
+	if _, err := s2.UpdateSettings(model.SettingsPatch{UserAgent: &ua, S3UploadConcurrency: &uploads}); err != nil {
+		t.Fatal(err)
+	}
+	want = s2.Settings()
+	closeService(t, s2)
+	s3 := openAt(t, st, e)
+	defer closeService(t, s3)
+	if got := s3.Settings(); got != want {
+		t.Fatalf("清除覆盖值未持久化: %+v", got)
+	}
+}
+
 func TestRecoverUncommittedBatchFromSnapshots(t *testing.T) {
 	st, err := store.New(t.TempDir())
 	if err != nil {

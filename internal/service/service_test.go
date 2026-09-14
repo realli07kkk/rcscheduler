@@ -249,13 +249,24 @@ func TestUnknownResultRetryAndPause(t *testing.T) {
 func TestAutomaticRetryLimit(t *testing.T) {
 	e := &fakeEngine{}
 	s, _ := newTestService(t, e)
+	ua, uploads := "initial-agent", 8
+	if _, err := s.UpdateSettings(model.SettingsPatch{UserAgent: &ua, S3UploadConcurrency: &uploads}); err != nil {
+		t.Fatal(err)
+	}
 	s.Start(context.Background())
 	s.Import(request(inputDir(t, 1), "batch"))
 	b := waitBatch(t, s, "batch", "ready")
 	for i := 0; i < 3; i++ {
 		want := i + 1
 		until(t, 3*time.Second, func() bool { return e.count() == want })
-		_, p := e.get(i)
+		spec, p := e.get(i)
+		if spec.Attempt.UserAgent != ua || spec.Attempt.S3UploadConcurrency != uploads {
+			t.Fatalf("自动重试未使用最新配置: %+v", spec.Attempt)
+		}
+		ua, uploads = "retry-agent", 4
+		if _, err := s.UpdateSettings(model.SettingsPatch{UserAgent: &ua, S3UploadConcurrency: &uploads}); err != nil {
+			t.Fatal(err)
+		}
 		p.finish(5)
 	}
 	until(t, 3*time.Second, func() bool {
@@ -264,6 +275,77 @@ func TestAutomaticRetryLimit(t *testing.T) {
 	})
 	if e.count() != 3 {
 		t.Fatal("超过三次自动执行")
+	}
+}
+
+func TestSerialManifestWorkflow(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		code  int
+		state model.TaskState
+	}{
+		{"success", 0, model.Succeeded},
+		{"incomplete", 0, model.NeedsReview},
+		{"failed", 1, model.Failed},
+		{"retry_wait", 5, model.RetryWait},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &fakeEngine{}
+			s, _ := newTestService(t, e)
+			s.options.RetryDelays = []time.Duration{time.Hour}
+			one, workers, uploads := 1, 64, 8
+			bw, ua := "40M", "aws-sdk-go-v2/1.41.4"
+			if _, err := s.UpdateSettings(model.SettingsPatch{MaxRunning: &one, BandwidthBudget: &bw, Transfers: &workers, Checkers: &workers, UserAgent: &ua, S3UploadConcurrency: &uploads}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			req := request(inputDir(t, 3), "batch")
+			req.Source = "source,no_head_object=true:example-bucket"
+			if _, err := s.Import(req); err != nil {
+				t.Fatal(err)
+			}
+			waitBatch(t, s, "batch", "ready")
+			until(t, 3*time.Second, func() bool { return e.count() == 1 })
+			first, p := e.get(0)
+			if first.Task.Name != "000.txt" || first.Task.Source != req.Source || first.Attempt.UserAgent != ua || first.Attempt.S3UploadConcurrency != uploads {
+				t.Fatalf("首份清单参数错误: %+v", first)
+			}
+			ua, uploads = "updated-agent", 4
+			if _, err := s.UpdateSettings(model.SettingsPatch{UserAgent: &ua, S3UploadConcurrency: &uploads}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.state == model.Succeeded {
+				completeFake(t, e, 0)
+			} else {
+				p.finish(tc.code)
+			}
+			for i := 1; i < 3; i++ {
+				until(t, 3*time.Second, func() bool { return e.count() == i+1 })
+				spec, _ := e.get(i)
+				if spec.Task.Name != fmt.Sprintf("%03d.txt", i) || spec.Attempt.UserAgent != ua || spec.Attempt.S3UploadConcurrency != uploads {
+					t.Fatalf("后续清单参数错误: %+v", spec)
+				}
+				prior, _ := e.get(i - 1)
+				previous, err := s.Task(prior.Task.ID)
+				if err != nil || previous.Attempts[0].EndedAt == nil || spec.Attempt.StartedAt.Before(*previous.Attempts[0].EndedAt) {
+					t.Fatalf("串行执行发生重叠: %+v %v", previous, err)
+				}
+				completeFake(t, e, i)
+			}
+			until(t, 3*time.Second, func() bool { return s.Health()["running"] == 0 })
+			old, err := s.Task(first.Task.ID)
+			if err != nil || old.State != tc.state || old.Attempts[0].UserAgent != "aws-sdk-go-v2/1.41.4" || old.Attempts[0].S3UploadConcurrency != 8 {
+				t.Fatalf("旧执行状态或快照被修改: %+v %v", old, err)
+			}
+			for i := 0; i < 3; i++ {
+				spec, _ := e.get(i)
+				if spec.Attempt.BandwidthBytesPerSecond != 40<<20 || spec.Attempt.Transfers != 64 || spec.Attempt.Checkers != 64 {
+					t.Fatalf("串行带宽或对象并发错误: %+v", spec.Attempt)
+				}
+			}
+		})
 	}
 }
 

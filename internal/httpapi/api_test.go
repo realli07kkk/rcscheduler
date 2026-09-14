@@ -98,6 +98,39 @@ func TestAuthenticationSettingsAndPagination(t *testing.T) {
 	}
 }
 
+func TestSchedulerRcloneOverrides(t *testing.T) {
+	h, s := testAPI(t)
+	patch := func(body string, status int) {
+		t.Helper()
+		w := call(h, "PATCH", "/v1/scheduler", body, "test-token")
+		if w.Code != status {
+			t.Fatalf("%s: %d %s", body, w.Code, w.Body.String())
+		}
+	}
+	patch(`{"userAgent":"aws-sdk-go-v2/1.41.4","s3UploadConcurrency":8}`, 200)
+	w := call(h, "GET", "/v1/scheduler", "", "test-token")
+	var got model.Settings
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 || got.UserAgent != "aws-sdk-go-v2/1.41.4" || got.S3UploadConcurrency != 8 {
+		t.Fatalf("读取配置失败: %s %v", w.Body.String(), err)
+	}
+	before := s.Settings()
+	patch(`{"userAgent":"invalid\nagent"}`, 400)
+	patch(`{"s3UploadConcurrency":-1}`, 400)
+	patch(`{"s3UploadConcurrency":1.5}`, 400)
+	patch(`{"revision":1,"userAgent":"conflict"}`, 409)
+	if s.Settings() != before {
+		t.Fatal("被拒绝的更新改变了配置")
+	}
+	patch(`{"bandwidthBudget":"40M"}`, 200)
+	if s.Settings().UserAgent != before.UserAgent || s.Settings().S3UploadConcurrency != 8 {
+		t.Fatal("部分更新覆盖了未指定字段")
+	}
+	patch(`{"userAgent":"","s3UploadConcurrency":0}`, 200)
+	if s.Settings().UserAgent != "" || s.Settings().S3UploadConcurrency != 0 {
+		t.Fatal("未清除覆盖值")
+	}
+}
+
 func TestDirectoryImportAndNativeQueries(t *testing.T) {
 	h, s := testAPI(t)
 	dir := t.TempDir()

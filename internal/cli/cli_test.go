@@ -6,9 +6,39 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestSchedulerRcloneOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want map[string]any
+	}{
+		{"set", []string{"--user-agent", "aws-sdk-go-v2/1.41.4", "--s3-upload-concurrency", "8"}, map[string]any{"userAgent": "aws-sdk-go-v2/1.41.4", "s3UploadConcurrency": float64(8)}},
+		{"clear", []string{"--user-agent", "", "--s3-upload-concurrency", "0"}, map[string]any{"userAgent": "", "s3UploadConcurrency": float64(0)}},
+		{"partial", []string{"--user-agent", "custom agent"}, map[string]any{"userAgent": "custom agent"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &client{http: &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(body, tc.want) {
+					t.Fatalf("请求字段错误: %+v", body)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+			})}}
+			c.connection.URL = "http://local"
+			if err := scheduler(context.Background(), c, append([]string{"set"}, tc.args...), io.Discard, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 type transportFunc func(*http.Request) (*http.Response, error)
 

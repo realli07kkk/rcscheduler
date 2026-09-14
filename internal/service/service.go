@@ -195,6 +195,12 @@ func (s *Service) UpdateSettings(p model.SettingsPatch) (model.Settings, error) 
 	if p.Checkers != nil {
 		v.Checkers = *p.Checkers
 	}
+	if p.UserAgent != nil {
+		v.UserAgent = *p.UserAgent
+	}
+	if p.S3UploadConcurrency != nil {
+		v.S3UploadConcurrency = *p.S3UploadConcurrency
+	}
 	if p.Paused != nil {
 		v.Paused = *p.Paused
 	}

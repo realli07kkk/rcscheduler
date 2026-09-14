@@ -144,7 +144,7 @@ func (r *Rclone) Socket(attempt string) string { return filepath.Join(r.RuntimeD
 
 func (r *Rclone) Args(spec Launch) []string {
 	a := spec.Attempt
-	return []string{"copy", spec.Task.Source, spec.Task.Destination,
+	args := []string{"copy", spec.Task.Source, spec.Task.Destination,
 		"--config", r.Config, "--files-from-raw", spec.ManifestPath,
 		"--no-traverse", "--ignore-existing", "--disable", "Copy", "--multi-thread-streams", "0",
 		"--bwlimit", strconv.FormatInt(a.BandwidthBytesPerSecond, 10) + "B",
@@ -153,6 +153,13 @@ func (r *Rclone) Args(spec Launch) []string {
 		"--log-file", filepath.Join(spec.AttemptDir, "rclone.jsonl"),
 		"--match", filepath.Join(spec.AttemptDir, "matched.txt"), "--error", filepath.Join(spec.AttemptDir, "failed.txt"),
 		"--rc", "--rc-addr", "unix://" + a.Socket, "--rc-no-auth"}
+	if a.UserAgent != "" {
+		args = append(args, "--user-agent", a.UserAgent)
+	}
+	if a.S3UploadConcurrency > 0 {
+		args = append(args, "--s3-upload-concurrency", strconv.Itoa(a.S3UploadConcurrency))
+	}
+	return args
 }
 
 func (r *Rclone) Start(spec Launch) (Process, error) {

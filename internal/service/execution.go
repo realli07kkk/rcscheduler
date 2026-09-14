@@ -125,6 +125,8 @@ func (s *Service) prepareLocked(t model.Task) (runner.Launch, *execution, error)
 		reason = "initial"
 	}
 	a := model.Attempt{ID: id, Reason: reason, SettingsRevision: s.settings.Revision, BandwidthBudget: s.settings.BandwidthBudget, MaxRunning: s.settings.MaxRunning, BandwidthBytesPerSecond: budget / int64(s.settings.MaxRunning), Transfers: s.settings.Transfers, Checkers: s.settings.Checkers, RcloneVersion: s.engine.Version(), Socket: s.engine.Socket(id), StartedAt: now}
+	a.UserAgent = s.settings.UserAgent
+	a.S3UploadConcurrency = s.settings.S3UploadConcurrency
 	l.Begin(id)
 	if err := l.Save(s.Store, s.taskPath(t.ID, "objects.json")); err != nil {
 		return runner.Launch{}, nil, s.storageFailureLocked(err)

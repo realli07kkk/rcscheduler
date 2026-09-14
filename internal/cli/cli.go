@@ -211,6 +211,8 @@ func scheduler(ctx context.Context, c *client, args []string, out, errOut io.Wri
 		bw := f.String("bwlimit", "", "新执行的带宽分配基准")
 		transfers := f.Int("transfers", 0, "新执行的文件传输并发数")
 		checkers := f.Int("checkers", 0, "新执行的检查并发数")
+		userAgent := f.String("user-agent", "", "新执行的 User-Agent，空字符串表示不覆盖 rclone 配置")
+		s3UploadConcurrency := f.Int("s3-upload-concurrency", 0, "新执行的 S3 分片上传并发数，0 表示不覆盖 rclone 配置")
 		if err := f.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -228,6 +230,10 @@ func scheduler(ctx context.Context, c *client, args []string, out, errOut io.Wri
 				p.Transfers = transfers
 			case "checkers":
 				p.Checkers = checkers
+			case "user-agent":
+				p.UserAgent = userAgent
+			case "s3-upload-concurrency":
+				p.S3UploadConcurrency = s3UploadConcurrency
 			}
 		})
 		if f.NFlag() == 0 {

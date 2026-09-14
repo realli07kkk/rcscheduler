@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,39 @@ import (
 	"github.com/realli07kkk/rcscheduler/internal/model"
 	"github.com/realli07kkk/rcscheduler/internal/store"
 )
+
+func TestRcloneWorkflowArguments(t *testing.T) {
+	r := Rclone{Config: "/config"}
+	spec := Launch{
+		Task:         model.Task{Source: "source,no_head_object=true:example-bucket", Destination: "destination:example-bucket"},
+		Attempt:      model.Attempt{BandwidthBytesPerSecond: 40 << 20, Transfers: 64, Checkers: 64, UserAgent: "custom agent/1.0", S3UploadConcurrency: 8},
+		ManifestPath: "/lists/task with spaces.txt",
+	}
+	args := r.Args(spec)
+	if !slices.Equal(args[:3], []string{"copy", spec.Task.Source, spec.Task.Destination}) {
+		t.Fatalf("源和目标发生改变: %q", args)
+	}
+	for flag, want := range map[string]string{
+		"--user-agent": "custom agent/1.0", "--s3-upload-concurrency": "8",
+		"--bwlimit": "41943040B", "--transfers": "64", "--checkers": "64",
+		"--files-from-raw": spec.ManifestPath, "--disable": "Copy", "--multi-thread-streams": "0",
+	} {
+		i := slices.Index(args, flag)
+		if i < 0 || i+1 >= len(args) || args[i+1] != want || slices.Contains(args[i+1:], flag) {
+			t.Fatalf("参数 %s 不符合预期: %q", flag, args)
+		}
+	}
+	for _, flag := range []string{"--no-traverse", "--ignore-existing"} {
+		if !slices.Contains(args, flag) {
+			t.Fatalf("缺少 %s", flag)
+		}
+	}
+	spec.Attempt.UserAgent, spec.Attempt.S3UploadConcurrency = "", 0
+	args = r.Args(spec)
+	if slices.Contains(args, "--user-agent") || slices.Contains(args, "--s3-upload-concurrency") {
+		t.Fatalf("默认配置覆盖了 rclone 参数: %q", args)
+	}
+}
 
 func TestControlledArgumentsAndEnvironment(t *testing.T) {
 	t.Setenv("RCLONE_FILES_FROM", "unrelated.txt")

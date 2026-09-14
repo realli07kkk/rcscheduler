@@ -28,6 +28,37 @@ make build
 
 每个执行自动启动一个 `rclone copy` 子进程，并创建私有 RC socket。无需另外运行 `rclone rcd`。Unix socket 默认放在 `/tmp/rcs-<uid>-<数据目录摘要>/` 的真实路径下，避免 macOS 的 socket 路径长度限制；可以用 `serve --runtime-dir` 指定短目录。
 
+## 从手动逐份清单迁移切换
+
+如果目前通过替换 `TASK_FILE` 逐份运行 `rclone copy --files-from-raw`，可以将整个目录一次导入，由服务串行接续执行。先按上文启动服务，再配置后续执行参数：
+
+```bash
+rcscheduler --data-dir /data/rcscheduler scheduler set \
+  --max-running 1 \
+  --bwlimit 40M \
+  --checkers 64 \
+  --transfers 64 \
+  --user-agent 'aws-sdk-go-v2/1.41.4' \
+  --s3-upload-concurrency 8
+
+rcscheduler --data-dir /data/rcscheduler batch import \
+  --id migration-001 \
+  --manifest-dir /absolute/path/r-list \
+  --source 'source,no_head_object=true:example-bucket' \
+  --destination 'destination:example-bucket'
+
+rcscheduler --data-dir /data/rcscheduler batch watch migration-001
+rcscheduler --data-dir /data/rcscheduler task list --batch-id migration-001
+```
+
+将路径、remote 和桶名替换为自己的配置。清单目录由服务所在机器读取，建议使用绝对路径。服务必须持续运行；Linux 可使用下文的 systemd 部署方式。
+
+每份清单生成一个任务，任务名称保留相对文件名，例如 `1_318_1784720583971.txt`，任务 ID 可从 `task list` 获取。默认读取目录第一层 `*.txt`，整批校验通过后，同批次、同优先级任务按文件名字典序启动。`maxRunning=1` 时全局最多运行一个任务，每个任务限速为完整的 `40M`；`transfers=64`、`checkers=64` 控制该任务内部的对象并发数。
+
+服务自动传入 `--files-from-raw`、`--no-traverse`、`--ignore-existing`、`--disable Copy` 和 `--multi-thread-streams 0`；源地址中的 `no_head_object=true` 原样传给 rclone。每次进程退出后自动补入下一份清单。失败或结果不完整会保留任务状态，后续清单继续执行；可重试错误沿用自动重试策略，等待重试期间也可执行后续清单。
+
+使用 `task watch <taskId>` 查看单任务进度，使用 `task history <taskId>` 查看执行参数、PID 和结果。服务管理子进程，日志按任务和执行次数保存，沿用 JSON 日志与 2 秒采样以支持对象统计和恢复。目录后续新增文件时，使用新的批次 ID 导入，并通过 `--pattern` 或独立目录选择新清单；已提交批次不会重新扫描目录。
+
 ## 原生批次导入
 
 先设置任务并发和带宽分配基准：
@@ -132,6 +163,19 @@ rcscheduler --data-dir /data/rcscheduler scheduler show
 
 `--transfers` 和 `--checkers` 也只影响后续执行。运行中的进程不会收到这些配置变更。
 
+`--user-agent` 和 `--s3-upload-concurrency` 同样是全局配置，应用于后续执行，并保存到每次执行的参数快照中，包括重试、暂停恢复和服务重启后的执行：
+
+```bash
+rcscheduler --data-dir /data/rcscheduler scheduler set \
+  --user-agent 'aws-sdk-go-v2/1.41.4' --s3-upload-concurrency 8
+
+# 清除覆盖值，让 rclone 使用自身配置或默认值。
+rcscheduler --data-dir /data/rcscheduler scheduler set \
+  --user-agent '' --s3-upload-concurrency 0
+```
+
+User-Agent 默认为空，不允许控制字符；上传并发默认 `0`，正整数表示显式覆盖，负数报错。空字符串和 `0` 表示启动时省略对应 rclone 参数。未指定的配置字段保持原值。旧版数据缺少这两个字段时使用上述默认值，JSON 文档版本仍为 `1`。
+
 ## 对象统计与恢复
 
 | 字段 | 含义 |
@@ -213,7 +257,7 @@ sudo systemctl status rcscheduler
 | `POST /v1/tasks/{id}/{pause\|resume\|cancel\|retry}` | 保存控制意图 |
 | `PATCH /v1/tasks/{id}` | `{ "priority": 10 }` |
 | `GET /v1/scheduler` | 配置及下一任务限速 |
-| `PATCH /v1/scheduler` | 部分更新配置，支持可选 `revision` 冲突检查 |
+| `PATCH /v1/scheduler` | 部分更新配置：`maxRunning, bandwidthBudget, transfers, checkers, userAgent, s3UploadConcurrency, paused`，支持可选 `revision` 冲突检查 |
 | `POST /v1/scheduler/{pause\|resume}` | 暂停或恢复派发 |
 | `GET /v1/status` | 引擎版本、任务数、加载错误和存储故障 |
 

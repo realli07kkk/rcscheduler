@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const FormatVersion = 1
@@ -27,12 +28,14 @@ func NewID() string {
 }
 
 type Settings struct {
-	Revision        int64  `json:"revision"`
-	MaxRunning      int    `json:"maxRunning"`
-	BandwidthBudget string `json:"bandwidthBudget"`
-	Transfers       int    `json:"transfers"`
-	Checkers        int    `json:"checkers"`
-	Paused          bool   `json:"paused"`
+	Revision            int64  `json:"revision"`
+	MaxRunning          int    `json:"maxRunning"`
+	BandwidthBudget     string `json:"bandwidthBudget"`
+	Transfers           int    `json:"transfers"`
+	Checkers            int    `json:"checkers"`
+	UserAgent           string `json:"userAgent"`
+	S3UploadConcurrency int    `json:"s3UploadConcurrency"`
+	Paused              bool   `json:"paused"`
 }
 
 func DefaultSettings() Settings {
@@ -72,6 +75,12 @@ func BandwidthBytes(value string) (int64, error) {
 }
 
 func (s Settings) Validate() error {
+	if strings.ContainsFunc(s.UserAgent, unicode.IsControl) {
+		return fmt.Errorf("userAgent 不能包含控制字符")
+	}
+	if s.S3UploadConcurrency < 0 {
+		return fmt.Errorf("s3UploadConcurrency 不能为负数，0 表示不覆盖 rclone 配置")
+	}
 	if s.MaxRunning < 1 || s.MaxRunning > 256 {
 		return fmt.Errorf("maxRunning 必须在 1..256 内")
 	}
@@ -89,12 +98,14 @@ func (s Settings) Validate() error {
 }
 
 type SettingsPatch struct {
-	Revision        *int64  `json:"revision,omitempty"`
-	MaxRunning      *int    `json:"maxRunning,omitempty"`
-	BandwidthBudget *string `json:"bandwidthBudget,omitempty"`
-	Transfers       *int    `json:"transfers,omitempty"`
-	Checkers        *int    `json:"checkers,omitempty"`
-	Paused          *bool   `json:"paused,omitempty"`
+	Revision            *int64  `json:"revision,omitempty"`
+	MaxRunning          *int    `json:"maxRunning,omitempty"`
+	BandwidthBudget     *string `json:"bandwidthBudget,omitempty"`
+	Transfers           *int    `json:"transfers,omitempty"`
+	Checkers            *int    `json:"checkers,omitempty"`
+	UserAgent           *string `json:"userAgent,omitempty"`
+	S3UploadConcurrency *int    `json:"s3UploadConcurrency,omitempty"`
+	Paused              *bool   `json:"paused,omitempty"`
 }
 
 type ImportRequest struct {
@@ -218,6 +229,8 @@ type Attempt struct {
 	BandwidthBytesPerSecond int64      `json:"bandwidthBytesPerSecond"`
 	Transfers               int        `json:"transfers"`
 	Checkers                int        `json:"checkers"`
+	UserAgent               string     `json:"userAgent"`
+	S3UploadConcurrency     int        `json:"s3UploadConcurrency"`
 	RcloneVersion           string     `json:"rcloneVersion"`
 	PID                     int        `json:"pid,omitempty"`
 	Socket                  string     `json:"socket"`

@@ -128,7 +128,7 @@ func TestRealCLIImportAndCrashRecovery(t *testing.T) {
 	}
 	p := start(1)
 	command(nil, "scheduler", "pause")
-	command(nil, "scheduler", "set", "--max-running", "2", "--bwlimit", "20M")
+	command(nil, "scheduler", "set", "--max-running", "1", "--bwlimit", "40M", "--transfers", "64", "--checkers", "64", "--user-agent", "aws-sdk-go-v2/1.41.4", "--s3-upload-concurrency", "8")
 	var batch model.Batch
 	command(&batch, "batch", "import", "--id", "initial", "--manifest-dir", lists, "--source", source, "--destination", dest)
 	if batch.ImportState != "ready" || batch.Summary.Tasks != 3 {
@@ -140,6 +140,9 @@ func TestRealCLIImportAndCrashRecovery(t *testing.T) {
 		task := waitTask(m.TaskID, model.Succeeded)
 		if task.Counts.CopiedObjects != 2 {
 			t.Fatalf("%+v", task.Counts)
+		}
+		if len(task.Attempts) != 1 || task.Attempts[0].UserAgent != "aws-sdk-go-v2/1.41.4" || task.Attempts[0].S3UploadConcurrency != 8 || task.Attempts[0].BandwidthBytesPerSecond != 40<<20 {
+			t.Fatalf("迁移配置快照错误: %+v", task.Attempts)
 		}
 	}
 	command(&batch, "batch", "show", "initial")
@@ -173,15 +176,23 @@ func TestRealCLIImportAndCrashRecovery(t *testing.T) {
 	}
 	<-p.done
 	_ = start(2)
+	var settings model.Settings
+	command(&settings, "scheduler", "show")
+	if settings.UserAgent != "aws-sdk-go-v2/1.41.4" || settings.S3UploadConcurrency != 8 {
+		t.Fatalf("重启丢失 rclone 配置: %+v", settings)
+	}
 	recovered := waitTask(id, model.Queued)
 	if len(recovered.Attempts) != 1 || recovered.Attempts[0].Outcome != "interrupted" {
 		t.Fatalf("未恢复中断记录: %+v", recovered)
 	}
-	command(nil, "scheduler", "set", "--bwlimit", "40M")
+	command(nil, "scheduler", "set", "--bwlimit", "40M", "--user-agent", "recovery-agent", "--s3-upload-concurrency", "4")
 	command(nil, "scheduler", "resume")
 	finished := waitTask(id, model.Succeeded)
 	if len(finished.Attempts) != 2 || finished.Attempts[0].BandwidthBytesPerSecond != 128<<10 || finished.Attempts[1].BandwidthBytesPerSecond != 40<<20 {
 		t.Fatalf("重启参数快照错误: %+v", finished.Attempts)
+	}
+	if finished.Attempts[0].UserAgent != "aws-sdk-go-v2/1.41.4" || finished.Attempts[0].S3UploadConcurrency != 8 || finished.Attempts[1].UserAgent != "recovery-agent" || finished.Attempts[1].S3UploadConcurrency != 4 {
+		t.Fatalf("恢复未保留新旧参数快照: %+v", finished.Attempts)
 	}
 	if finished.Counts.CopiedObjects != 1 || finished.Counts.CompletedObjects != 1 {
 		t.Fatalf("恢复后计数错误: %+v", finished.Counts)
